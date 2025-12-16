@@ -2,7 +2,7 @@
 /* eslint-disable no-unused-vars */
 
 import { Input } from "@/components/ui/input";
-import React, { useContext, useEffect, useState } from "react";
+import React, { useContext, useEffect, useState, useRef } from "react";
 import {
   PROMPT,
   SelectBudgetOptions,
@@ -29,16 +29,20 @@ import { db } from "@/Service/Firebase";
 import { doc, setDoc } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 
+import { getPlaceDetails } from "@/Service/globalApi";
+
 function CreateTrip() {
   const [place, setPlace] = useState("");
   const [suggestions, setSuggestions] = useState([]);
   const [formData, setFormData] = useState({});
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-
   const navigate = useNavigate();
+
   const { user, loginWithPopup, isAuthenticated } =
     useContext(LogInContext);
+
+  const debounceRef = useRef(null);
 
   const handleInputChange = (name, value) => {
     setFormData((prev) => ({ ...prev, [name]: value }));
@@ -67,38 +71,11 @@ function CreateTrip() {
     }
   }, [user]);
 
-  // 🔥 NEW PLACES AUTOCOMPLETE (NO LEGACY API)
-  const fetchPlaceSuggestions = async (value) => {
-    setPlace(value);
-    handleInputChange("location", value);
-
-    if (!value || !window.google) {
-      setSuggestions([]);
-      return;
-    }
-
-    try {
-      const { AutocompleteSuggestion } =
-        window.google.maps.places;
-
-      const response =
-        await AutocompleteSuggestion.fetchAutocompleteSuggestions({
-          input: value,
-          includedPrimaryTypes: ["geocode"],
-        });
-
-      setSuggestions(response.suggestions || []);
-    } catch (error) {
-      console.error("Places API error:", error);
-    }
-  };
-
   const SaveTrip = async (TripData) => {
     const User = JSON.parse(localStorage.getItem("User"));
     const id = Date.now().toString();
 
     setIsLoading(true);
-
     await setDoc(doc(db, "Trips", id), {
       tripId: id,
       userSelection: formData,
@@ -106,10 +83,37 @@ function CreateTrip() {
       userName: User?.name,
       userEmail: User?.email,
     });
-
     setIsLoading(false);
     localStorage.setItem("Trip", JSON.stringify(TripData));
     navigate("/my-trips/" + id);
+  };
+
+  // 🔹 FETCH AUTOCOMPLETE SUGGESTIONS
+  const fetchPlaceSuggestions = (value) => {
+    setPlace(value);
+    handleInputChange("location", value);
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    debounceRef.current = setTimeout(async () => {
+      if (!value) {
+        setSuggestions([]);
+        return;
+      }
+
+      try {
+        const requestData = {
+          query: value,
+          pageSize: 5, // limit suggestions
+        };
+
+        const response = await getPlaceDetails(requestData);
+        const places = response.data?.places || [];
+        setSuggestions(places);
+      } catch (error) {
+        console.error("Places API error:", error);
+      }
+    }, 300);
   };
 
   const generateTrip = async () => {
@@ -124,33 +128,27 @@ function CreateTrip() {
       !formData?.People ||
       !formData?.Budget
     ) {
-      return toast.error("Please fill all fields.");
+      return toast.error("Please fill out every field.");
     }
 
     if (formData.noOfDays > 5)
       return toast.error("Trip days must be less than 5");
+    if (formData.noOfDays < 1) return toast.error("Invalid number of days");
 
-    if (formData.noOfDays < 1)
-      return toast.error("Invalid number of days");
-
-    const FINAL_PROMPT = PROMPT.replace(
-      /{location}/g,
-      formData.location
-    )
+    const FINAL_PROMPT = PROMPT.replace(/{location}/g, formData.location)
       .replace(/{noOfDays}/g, formData.noOfDays)
       .replace(/{People}/g, formData.People)
       .replace(/{Budget}/g, formData.Budget);
 
     try {
       const toastId = toast.loading("Generating Trip ✈️");
-
       setIsLoading(true);
+
       const result = await chatSession.sendMessage(FINAL_PROMPT);
       const trip = JSON.parse(result.response.text());
 
       setIsLoading(false);
       SaveTrip(trip);
-
       toast.dismiss(toastId);
       toast.success("Trip Generated Successfully");
     } catch (error) {
@@ -168,7 +166,7 @@ function CreateTrip() {
           Share Your Travel Preferences 🌟🚀
         </h2>
         <p className="text-sm text-gray-600 font-medium mt-3">
-          Help us craft your perfect adventure.
+          Help us craft your perfect adventure with just a few details.
         </p>
       </div>
 
@@ -183,31 +181,25 @@ function CreateTrip() {
             <Input
               placeholder="Search destination"
               value={place}
-              onChange={(e) =>
-                fetchPlaceSuggestions(e.target.value)
-              }
+              onChange={(e) => fetchPlaceSuggestions(e.target.value)}
             />
 
             {suggestions.length > 0 && (
               <ul className="absolute z-50 w-full bg-white border rounded-lg mt-1 max-h-60 overflow-auto shadow-lg">
-                {suggestions.map((item, index) => {
-                  const text =
-                    item.placePrediction.text.text;
-
-                  return (
-                    <li
-                      key={index}
-                      className="p-3 cursor-pointer hover:bg-gray-100"
-                      onClick={() => {
-                        setPlace(text);
-                        handleInputChange("location", text);
-                        setSuggestions([]);
-                      }}
-                    >
-                      {text}
-                    </li>
-                  );
-                })}
+                {suggestions.map((item, index) => (
+                  <li
+                    key={index}
+                    className="p-3 cursor-pointer hover:bg-gray-100"
+                    onClick={() => {
+                      const text = item.displayName || item.name;
+                      setPlace(text);
+                      handleInputChange("location", text);
+                      setSuggestions([]);
+                    }}
+                  >
+                    {item.displayName || item.name}
+                  </li>
+                ))}
               </ul>
             )}
           </div>
@@ -215,9 +207,7 @@ function CreateTrip() {
 
         {/* DAYS */}
         <div className="day">
-          <h2 className="font-semibold mb-3">
-            How long is your Trip? 🕜
-          </h2>
+          <h2 className="font-semibold mb-3">How long is your Trip? 🕜</h2>
           <Input
             type="number"
             placeholder="Ex: 2"
@@ -229,22 +219,15 @@ function CreateTrip() {
 
         {/* BUDGET */}
         <div className="budget">
-          <h2 className="font-semibold mb-3">
-            What is your Budget? 💳
-          </h2>
+          <h2 className="font-semibold mb-3">What is your Budget? 💳</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
             {SelectBudgetOptions.map((item) => (
               <div
                 key={item.id}
-                onClick={() =>
-                  handleInputChange("Budget", item.title)
-                }
-                className={`p-4 h-32 border rounded-lg cursor-pointer hover:scale-105 transition
-                  ${
-                    formData.Budget === item.title
-                      ? "border-black shadow-xl"
-                      : ""
-                  }`}
+                onClick={() => handleInputChange("Budget", item.title)}
+                className={`p-4 h-32 border rounded-lg cursor-pointer hover:scale-105 transition ${
+                  formData.Budget === item.title ? "border-black shadow-xl" : ""
+                }`}
               >
                 <h3 className="font-bold">
                   {item.icon} {item.title}
@@ -257,30 +240,21 @@ function CreateTrip() {
 
         {/* PEOPLE */}
         <div className="people">
-          <h2 className="font-semibold mb-3">
-            Who are you traveling with? 🚗
-          </h2>
+          <h2 className="font-semibold mb-3">Who are you traveling with? 🚗</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
             {SelectNoOfPersons.map((item) => (
               <div
                 key={item.id}
-                onClick={() =>
-                  handleInputChange("People", item.no)
-                }
-                className={`p-4 h-32 border rounded-lg cursor-pointer hover:scale-105 transition
-                  ${
-                    formData.People === item.no
-                      ? "border-black shadow-xl"
-                      : ""
-                  }`}
+                onClick={() => handleInputChange("People", item.no)}
+                className={`p-4 h-32 border rounded-lg cursor-pointer hover:scale-105 transition ${
+                  formData.People === item.no ? "border-black shadow-xl" : ""
+                }`}
               >
                 <h3 className="font-bold">
                   {item.icon} {item.title}
                 </h3>
                 <p className="text-gray-500">{item.desc}</p>
-                <p className="text-sm text-gray-400">
-                  {item.no}
-                </p>
+                <p className="text-sm text-gray-400">{item.no}</p>
               </div>
             ))}
           </div>
@@ -291,7 +265,7 @@ function CreateTrip() {
       <div className="flex justify-center mt-10">
         <Button disabled={isLoading} onClick={generateTrip}>
           {isLoading ? (
-            <AiOutlineLoading3Quarters className="animate-spin" />
+            <AiOutlineLoading3Quarters className="animate-spin h-6 w-6" />
           ) : (
             "Plan A Trip"
           )}
