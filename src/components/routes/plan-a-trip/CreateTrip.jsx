@@ -3,7 +3,6 @@
 
 import { Input } from "@/components/ui/input";
 import React, { useContext, useEffect, useState } from "react";
-import GooglePlacesAutocomplete from "react-google-places-autocomplete";
 import {
   PROMPT,
   SelectBudgetOptions,
@@ -32,15 +31,17 @@ import { useNavigate } from "react-router-dom";
 
 function CreateTrip() {
   const [place, setPlace] = useState("");
-  const [formData, setFormData] = useState([]);
+  const [suggestions, setSuggestions] = useState([]);
+  const [formData, setFormData] = useState({});
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const navigate = useNavigate();
 
-  const { user, loginWithPopup, isAuthenticated } = useContext(LogInContext);
+  const navigate = useNavigate();
+  const { user, loginWithPopup, isAuthenticated } =
+    useContext(LogInContext);
 
   const handleInputChange = (name, value) => {
-    setFormData((prevState) => ({ ...prevState, [name]: value }));
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const SignIn = async () => {
@@ -49,8 +50,9 @@ function CreateTrip() {
 
   const SaveUser = async () => {
     const User = JSON.parse(localStorage.getItem("User"));
-    const id = User?.email;
-    await setDoc(doc(db, "Users", id), {
+    if (!User?.email) return;
+
+    await setDoc(doc(db, "Users", User.email), {
       userName: User?.name,
       userEmail: User?.email,
       userPicture: User?.picture,
@@ -65,58 +67,87 @@ function CreateTrip() {
     }
   }, [user]);
 
+  // 🔥 NEW PLACES AUTOCOMPLETE (NO LEGACY API)
+  const fetchPlaceSuggestions = async (value) => {
+    setPlace(value);
+    handleInputChange("location", value);
+
+    if (!value || !window.google) {
+      setSuggestions([]);
+      return;
+    }
+
+    try {
+      const { AutocompleteSuggestion } =
+        window.google.maps.places;
+
+      const response =
+        await AutocompleteSuggestion.fetchAutocompleteSuggestions({
+          input: value,
+          includedPrimaryTypes: ["geocode"],
+        });
+
+      setSuggestions(response.suggestions || []);
+    } catch (error) {
+      console.error("Places API error:", error);
+    }
+  };
+
   const SaveTrip = async (TripData) => {
     const User = JSON.parse(localStorage.getItem("User"));
     const id = Date.now().toString();
+
     setIsLoading(true);
+
     await setDoc(doc(db, "Trips", id), {
       tripId: id,
       userSelection: formData,
       tripData: TripData,
-
       userName: User?.name,
       userEmail: User?.email,
     });
+
     setIsLoading(false);
-    localStorage.setItem('Trip', JSON.stringify(TripData));
-    navigate('/my-trips/'+id);
+    localStorage.setItem("Trip", JSON.stringify(TripData));
+    navigate("/my-trips/" + id);
   };
 
   const generateTrip = async () => {
     if (!isAuthenticated) {
-      toast("Sign In to continue", {
-        icon: "⚠️",
-      });
+      toast("Sign In to continue", { icon: "⚠️" });
       return setIsDialogOpen(true);
     }
+
     if (
       !formData?.noOfDays ||
       !formData?.location ||
       !formData?.People ||
       !formData?.Budget
     ) {
-      return toast.error("Please fill out every field or select every option.");
+      return toast.error("Please fill all fields.");
     }
-    if (formData?.noOfDays > 5) {
-      return toast.error("Please enter Trip Days less then 5");
-    }
-    if (formData?.noOfDays < 1) {
-      return toast.error("Invalid number of Days");
-    }
-    const FINAL_PROMPT = PROMPT.replace(/{location}/g, formData?.location)
-      .replace(/{noOfDays}/g, formData?.noOfDays)
-      .replace(/{People}/g, formData?.People)
-      .replace(/{Budget}/g, formData?.Budget);
 
+    if (formData.noOfDays > 5)
+      return toast.error("Trip days must be less than 5");
+
+    if (formData.noOfDays < 1)
+      return toast.error("Invalid number of days");
+
+    const FINAL_PROMPT = PROMPT.replace(
+      /{location}/g,
+      formData.location
+    )
+      .replace(/{noOfDays}/g, formData.noOfDays)
+      .replace(/{People}/g, formData.People)
+      .replace(/{Budget}/g, formData.Budget);
 
     try {
-      const toastId = toast.loading("Generating Trip", {
-        icon: "✈️",
-      });
+      const toastId = toast.loading("Generating Trip ✈️");
 
       setIsLoading(true);
       const result = await chatSession.sendMessage(FINAL_PROMPT);
       const trip = JSON.parse(result.response.text());
+
       setIsLoading(false);
       SaveTrip(trip);
 
@@ -125,7 +156,7 @@ function CreateTrip() {
     } catch (error) {
       setIsLoading(false);
       toast.dismiss();
-      toast.error("Failed to generate trip. Please try again.");
+      toast.error("Failed to generate trip");
       console.error(error);
     }
   };
@@ -137,137 +168,158 @@ function CreateTrip() {
           Share Your Travel Preferences 🌟🚀
         </h2>
         <p className="text-sm text-gray-600 font-medium mt-3">
-          Help us craft your perfect adventure with just a few details.
-          Travify will generate a tailored itinerary based on your
-          preferences.
+          Help us craft your perfect adventure.
         </p>
       </div>
 
-      <div className="form mt-10 flex flex-col gap-10 md:gap-20 ">
+      <div className="form mt-10 flex flex-col gap-10 md:gap-20">
+        {/* LOCATION */}
         <div className="place">
-          <h2 className="font-semibold text-md md:text-lg mb-3 text-center md:text-left">
+          <h2 className="font-semibold mb-3">
             Where do you want to Explore? 🏖️
           </h2>
-          <GooglePlacesAutocomplete
-            apiKey={import.meta.env.VITE_GOOGLE_MAP_API_KEY}
-            selectProps={{
-              value: place,
-              onChange: (place) => {
-                setPlace(place);
-                handleInputChange("location", place.label);
-              },
-            }}
-          />
-        </div>
 
-        <div className="day">
-          <h2 className="font-semibold text-md md:text-lg mb-3 text-center md:text-left">
-            How long is your Trip? 🕜
-          </h2>
-          <Input
-            placeholder="Ex: 2"
-            type="number"
-            onChange={(day) => handleInputChange("noOfDays", day.target.value)}
-          />
-        </div>
+          <div className="relative">
+            <Input
+              placeholder="Search destination"
+              value={place}
+              onChange={(e) =>
+                fetchPlaceSuggestions(e.target.value)
+              }
+            />
 
-        <div className="budget">
-          <h2 className="font-semibold text-md md:text-lg mb-3 text-center md:text-left">
-            What is your Budget? 💳
-          </h2>
-          <div className="options grid grid-cols-1 gap-5 md:grid-cols-3 cursor-pointer">
-            {SelectBudgetOptions.map((item) => {
-              return (
-                <div
-                  onClick={(e) => handleInputChange("Budget", item.title)}
-                  key={item.id}
-                  className={`option transition-all hover:scale-110 p-4 h-32 flex items-center justify-center flex-col border rounded-lg hover:shadow-lg
-                  ${formData?.Budget == item.title && "border-black shadow-xl"}
-                  `}
-                >
-                  <h3 className="font-bold text-[15px] md:font-[18px]">
-                    {item.icon} {item.title} :
-                  </h3>
-                  <p className="text-gray-500 font-medium">{item.desc}</p>
-                </div>
-              );
-            })}
+            {suggestions.length > 0 && (
+              <ul className="absolute z-50 w-full bg-white border rounded-lg mt-1 max-h-60 overflow-auto shadow-lg">
+                {suggestions.map((item, index) => {
+                  const text =
+                    item.placePrediction.text.text;
+
+                  return (
+                    <li
+                      key={index}
+                      className="p-3 cursor-pointer hover:bg-gray-100"
+                      onClick={() => {
+                        setPlace(text);
+                        handleInputChange("location", text);
+                        setSuggestions([]);
+                      }}
+                    >
+                      {text}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
         </div>
 
+        {/* DAYS */}
+        <div className="day">
+          <h2 className="font-semibold mb-3">
+            How long is your Trip? 🕜
+          </h2>
+          <Input
+            type="number"
+            placeholder="Ex: 2"
+            onChange={(e) =>
+              handleInputChange("noOfDays", e.target.value)
+            }
+          />
+        </div>
+
+        {/* BUDGET */}
+        <div className="budget">
+          <h2 className="font-semibold mb-3">
+            What is your Budget? 💳
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            {SelectBudgetOptions.map((item) => (
+              <div
+                key={item.id}
+                onClick={() =>
+                  handleInputChange("Budget", item.title)
+                }
+                className={`p-4 h-32 border rounded-lg cursor-pointer hover:scale-105 transition
+                  ${
+                    formData.Budget === item.title
+                      ? "border-black shadow-xl"
+                      : ""
+                  }`}
+              >
+                <h3 className="font-bold">
+                  {item.icon} {item.title}
+                </h3>
+                <p className="text-gray-500">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* PEOPLE */}
         <div className="people">
-          <h2 className="font-semibold text-md md:text-lg mb-3 text-center md:text-left">
+          <h2 className="font-semibold mb-3">
             Who are you traveling with? 🚗
           </h2>
-          <div className="options grid grid-cols-1 gap-5 md:grid-cols-3 cursor-pointer">
-            {SelectNoOfPersons.map((item) => {
-              return (
-                <div
-                  onClick={(e) => handleInputChange("People", item.no)}
-                  key={item.id}
-                  className={`option transition-all hover:scale-110 p-4 h-32 flex items-center justify-center flex-col border rounded-lg hover:shadow-lg
-                    ${
-                      formData?.People == item.no &&
-                      "border border-black shadow-xl"
-                    }
-                  `}
-                >
-                  <h3 className="font-bold text-[15px] md:font-[18px]">
-                    {item.icon} {item.title} :
-                  </h3>
-                  <p className="text-gray-500 font-medium">{item.desc}</p>
-                  <p className="text-gray-500 text-sm font-normal">{item.no}</p>
-                </div>
-              );
-            })}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            {SelectNoOfPersons.map((item) => (
+              <div
+                key={item.id}
+                onClick={() =>
+                  handleInputChange("People", item.no)
+                }
+                className={`p-4 h-32 border rounded-lg cursor-pointer hover:scale-105 transition
+                  ${
+                    formData.People === item.no
+                      ? "border-black shadow-xl"
+                      : ""
+                  }`}
+              >
+                <h3 className="font-bold">
+                  {item.icon} {item.title}
+                </h3>
+                <p className="text-gray-500">{item.desc}</p>
+                <p className="text-sm text-gray-400">
+                  {item.no}
+                </p>
+              </div>
+            ))}
           </div>
         </div>
       </div>
 
-      <div className="create-trip-btn w-full flex items-center justify-center h-32">
+      {/* BUTTON */}
+      <div className="flex justify-center mt-10">
         <Button disabled={isLoading} onClick={generateTrip}>
           {isLoading ? (
-            <AiOutlineLoading3Quarters className="h-6 w-6 animate-spin" />
+            <AiOutlineLoading3Quarters className="animate-spin" />
           ) : (
             "Plan A Trip"
           )}
         </Button>
       </div>
 
-      <Dialog
-        className="m-4"
-        open={isDialogOpen}
-        onOpenChange={setIsDialogOpen}
-      >
+      {/* LOGIN DIALOG */}
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-xl font-bold">
-              {user ? "Thank you for LogIn" : "Sign In to Continue"}
+            <DialogTitle>
+              {user ? "Logged In" : "Sign In to Continue"}
             </DialogTitle>
             <DialogDescription>
-              <span className="flex gap-2">
-                <span>
-                  {user
-                    ? "Logged In Securely to JourneyJolt with Google Authentication"
-                    : "Sign In to Travify with Google Authentication Securely"}
-                </span>
-              </span>
-              {user ? (
-                ""
-              ) : (
+              {!user && (
                 <Button
                   onClick={SignIn}
-                  className="w-full mt-5 flex gap-2 items-center justify-center"
+                  className="w-full mt-5 flex gap-2"
                 >
-                  Sign In with <FcGoogle className="h-5 w-5" />
+                  Sign In with <FcGoogle />
                 </Button>
               )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" className="w-full">
-              <DialogClose>Close</DialogClose>
-            </Button>
+            <DialogClose asChild>
+              <Button variant="outline">Close</Button>
+            </DialogClose>
           </DialogFooter>
         </DialogContent>
       </Dialog>
