@@ -19,6 +19,7 @@ const configPlace = {
     ],
   },
 };
+
 const configCity = {
   headers: {
     "Content-Type": "application/json",
@@ -39,4 +40,6 @@ export const PHOTO_URL =
 
 export const getPlaceDetails = (data) =>
   axios.post(BASE_URL, data, configPlace);
-export const getCityDetails = (data) => axios.post(BASE_URL, data, configCity);
+
+export const getCityDetails = (data) =>
+  axios.post(BASE_URL, data, configCity);
